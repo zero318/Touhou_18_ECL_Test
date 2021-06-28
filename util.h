@@ -53,6 +53,8 @@ constexpr size_t GetArrLength(T(&)[size]) { return size; }
 
 #define noinline __declspec(noinline)
 
+// These functions are useful to make the compiler
+// not optimize out calls to stub functions.
 noinline void assume_all_registers_volatile();
 noinline void assume_all_registers_volatile(void* use_arg);
 

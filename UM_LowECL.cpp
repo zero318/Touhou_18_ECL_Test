@@ -15,10 +15,12 @@
 const float PI_F = (float)M_PI;
 const float TWO_PI_F = (float)M_PI * 2;
 
+// 0x404B80
 noinline float atan2_wrapper(float y, float x) {
 	return atan2(y, x);
 }
 
+// 0x4028F0
 float reduce_angle(float angle) {
 	int32_t counter = 0;
 	while (angle > PI_F) {
@@ -88,8 +90,11 @@ struct AbilityShop {
 
 };
 
+// The name and type for this are a semi-educated guess
+// 0x4CF2A4
 AbilityShop *__restrict static_ability_shop_ptr;
 
+// 0x4CF2E4
 GameThread *__restrict static_game_thread_ptr;
 
 typedef struct AnmVM AnmVM;
@@ -290,14 +295,19 @@ ValidateFieldOffset(0x544,	AnmVM, s);
 
 typedef struct AnmManager AnmManager;
 struct AnmManager {
+	// Made up field to make the compiler cooperate with everything else
 	uintptr_t temp = 12;
 
+	// 0x488B40
 	noinline AnmVM* __thiscall get_vm_with_id(AnmID ID) {
 		assume_all_registers_volatile();
 		return (AnmVM*)(this->temp + ID);
 	}
 };
 
+// The volatile pointer helps make sure the compiler doesn't optimize out
+// the assignment to ECX when calling functions.
+// 0x51F65C
 static AnmManager *volatile static_anm_manager_ptr = new AnmManager;
 
 typedef struct PlayerOption PlayerOption;
@@ -395,6 +405,7 @@ ValidateFieldOffset(0x479B0,	Player, unknown_float_F);
 ValidateFieldOffset(0x479B4,	Player, unknown_float_G);
 ValidateFieldOffset(0x479B8,	Player, unknown_float_H);
 
+// 0x4CF410
 Player* static_player_ptr;
 
 typedef struct EnemyFull EnemyFull;
@@ -489,7 +500,9 @@ struct EnemyFog {
 // 0x4CCBF0
 static float game_speed;
 
+// 0x4B35C0
 static float* time_scaling_table[] = { &game_speed };
+
 static inline constexpr size_t length_of_time_scaling_table = countof(time_scaling_table);
 
 inline float* get_time_scale(size_t& index) {
@@ -593,6 +606,7 @@ struct Enemy {
 	int32_t own_chapter;
 	int32_t ecl_570_bool;
 
+	// 0x42E5A0
 	noinline int32_t step_interpolators(void) {
 		assume_all_registers_volatile(this);
 		static volatile int32_t ret;
@@ -769,6 +783,7 @@ struct EnemyFull {
 	/* ... */	int32_t ecl_global_var_9909;
 	/* ... */	uint32_t __field_572C;
 
+	// 0x42FE80
 	noinline int32_t update() {
 		int32_t ret;
 		float slowdown = this->enemy_inner.slowdown;
@@ -810,6 +825,7 @@ struct EnemyFull {
 		return ret;
 	}
 
+	// 0x48D420
 	noinline int32_t ecl_run(float current_gamespeed) {
 		assume_all_registers_volatile(this);
 		return 1 + current_gamespeed + (uintptr_t)this;
@@ -819,17 +835,20 @@ ValidateFieldOffset(0x0,	EnemyFull, vtable);
 ValidateFieldOffset(0x4,	EnemyFull, next_in_some_list);
 ValidateFieldOffset(0x8,	EnemyFull, prev_in_some_list);
 
+// 0x42F890
 noinline void Enemy::update_fog(void) {
 	if (this->fog.fog_ptr) {
 		assume_all_registers_volatile(this);
 	}
 }
 
+// 0x42ED40
 noinline int32_t Enemy::step_game_logic(void) {
 	assume_all_registers_volatile(this);
 	return 0;
 }
 
+// 0x42FF80
 noinline int32_t Enemy::update(void) {
 	if (!this->unknown_flag_A) {
 		this->unknown_flag_A = true;
@@ -1032,7 +1051,9 @@ struct EnemyManager {
 	int32_t enemy_count_real;
 	unknown_fields(0x4);
 
-	noinline int on_tick() {
+
+	// 0x42DF50
+	noinline int32_t on_tick() {
 		GameThread* game_thread_ptr = static_game_thread_ptr;
 		if (game_thread_ptr != NULL &&
 			!(game_thread_ptr->skip_flag | game_thread_ptr->unknown_flag_A) &&

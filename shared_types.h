@@ -15,6 +15,12 @@ struct Float2 {
 	float x;
 	float y;
 
+	// I can't get MSVC to generate FSINCOS even when SSE is disabled
+	// and the use of EAX is a bit too conveniently placed to not be
+	// inline assembly. ZUN probably hasn't looked at this function
+	// in years.
+
+	// UM: 0x48D900
 	void make_coords_from_vector(float angle, float magnitude) {
 		__asm {
 			MOV EAX, this
