@@ -10,10 +10,14 @@ struct Timer {
 	int32_t current = 0;
 	float current_f = 0.0f;
 	uint32_t scale_table_index = 0;
-	uint32_t control;
+	union {
+		uint32_t flags;
+		struct {
+			uint32_t unknown_flag_A : 1;
+		};
+	};
 
-
-	
+	Timer() : unknown_flag_A(false) {};
 
 	void increment(float);
 	void increment_2(void);
@@ -23,7 +27,7 @@ ValidateFieldOffset(0x0,	Timer, previous);
 ValidateFieldOffset(0x4,	Timer, current);
 ValidateFieldOffset(0x8,	Timer, current_f);
 ValidateFieldOffset(0xC,	Timer, scale_table_index);
-ValidateFieldOffset(0x10,	Timer, control);
+ValidateFieldOffset(0x10,	Timer, flags);
 
 // =========================
 
@@ -37,6 +41,8 @@ struct InterpFloat {
 	Timer time;
 	int32_t end_time;
 	int32_t method;
+
+	InterpFloat() : end_time(0) {};
 };
 ValidateFieldOffset(0x0,	InterpFloat, initial);
 ValidateFieldOffset(0x4,	InterpFloat, goal);

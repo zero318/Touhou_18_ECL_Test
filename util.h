@@ -52,6 +52,7 @@ template<typename T, size_t size>
 constexpr size_t GetArrLength(T(&)[size]) { return size; }
 
 #define noinline __declspec(noinline)
+#define forceinline __forceinline
 
 // These functions are useful to make the compiler
 // not optimize out calls to stub functions.

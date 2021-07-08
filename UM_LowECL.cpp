@@ -650,7 +650,8 @@ struct EclInstr {
 	uint16_t param_mask;
 	uint8_t difficulty_mask;
 	uint8_t param_count;
-	uint32_t stack_refs;
+	uint8_t stack_refs;
+	probably_padding_bytes(0x3);
 	unsigned char data[];
 };
 ValidateFieldOffset(0x0,	EclInstr, time);
@@ -724,18 +725,108 @@ struct EclRunContext {
 	int32_t current_instr_offset;
 	union {
 		EclStackItem stack[EclStackCount];
-		unsigned char stack_[EclStackSize];
+		unsigned char stack_raw[EclStackSize];
 	};
 	int32_t stack_top_offset; // Like ESP
 	int32_t stack_locals_offset; // Like EBP
 	int32_t async_id;
-	ZUNLinkedList<EclRunContext>* parent;
+	union { // WTF even is this field, I can't tell.
+		EnemyFull* enemy_full;
+		ZUNLinkedList<EclRunContext>* parent;
+	};
 	unknown_fields(0x4);
 	uint8_t current_difficulty_mask;
 	probably_padding_bytes(0x3);
 	InterpFloat float_interps[8];
 	EclLocation float_interp_locations[8];
 	unknown_fields(0x4);
+	unknown_fields(0x20);
+
+	template <typename T>
+	forceinline void stack_push(T value) {
+		*(T*)(this->stack_raw + this->stack_top_offset) = value;
+		this->stack_top_offset += 4;
+	}
+
+	template <typename T>
+	forceinline void stack_push_type(T value) {
+		if constexpr (std::is_same_v<T, float>) {
+			this->stack_push<char>('f');
+		} else {
+			this->stack_push<char>('i');
+		}
+		this->stack_push<T>(value);
+	}
+
+	template <typename T>
+	forceinline T stack_pop() {
+		this->stack_top_offset -= 4;
+		return *(T*)(this->stack_raw + this->stack_top_offset);
+	}
+
+	template <typename T>
+	forceinline T stack_pop_cast() {
+		int32_t temp = this->stack_pop<int32_t>();
+		switch (this->stack_pop<char>()) {
+			case 'f':
+				//return reinterpret_cast<float>(temp);
+				return *(float*)&temp;
+			case 'i':
+				return temp;
+			default:
+				//return reinterpret_cast<T>(temp);
+				return *(T*)&temp;
+		}
+	}
+
+	forceinline int32_t stack_pop_int() {
+		//int32_t temp = this->stack_pop<int32_t>();
+		//if (this->stack_pop<char>() == 'f') {
+		//	temp = reinterpret_cast<float>(temp);
+		//	//temp = reinterpret_cast<float>(temp);
+		//}
+		EclStackItem stack_val = this->stack_pop<EclStackItem>();
+		if (this->stack_pop<char>() == 'f') {
+			stack_val.integer = stack_val.real;
+		}
+		return stack_val.integer;
+	}
+
+	forceinline int32_t stackLeave(void) {
+		int32_t old_locals_offset = this->stack_locals_offset;
+		this->stack_locals_offset = this->stack_pop<int>();
+		this->stack_top_offset = old_locals_offset;
+		return 0;
+	}
+
+	noinline EclInstr* get_sub_instrs();
+
+	noinline int32_t LowECL_Run(float current_gamespeed);
+
+	noinline int32_t get_int_arg(int32_t arg_index) {
+		assume_all_registers_volatile(this);
+		return arg_index + 1;
+	}
+
+	noinline int32_t* get_int_arg_ptr(int32_t sub_index) {
+		assume_all_registers_volatile(this);
+		return &sub_index + 1;
+	}
+
+	noinline float get_float_arg(int32_t arg_index) {
+		assume_all_registers_volatile(this);
+		return arg_index + 1;
+	}
+
+	noinline float* get_float_arg_ptr(int32_t arg_index) {
+		assume_all_registers_volatile(this);
+		return (float*)&arg_index + 1;
+	}
+
+	noinline int32_t ecl_call(int32_t sub_index, int, EclRunContext* parent) {
+		assume_all_registers_volatile(this);
+		return sub_index;
+	}
 };
 ValidateFieldOffset(0x0,	EclRunContext, time);
 ValidateFieldOffset(0x4,	EclRunContext, current_sub_index);
@@ -763,25 +854,74 @@ struct EnemyFullVTable {
 	void (__stdcall*unknown_func_A)(int32_t);
 };
 
+constexpr auto testing_2 = sizeof(EclRunContext);
 
+struct EclContextBase {
+
+	EclContextBase* next_context;
+	EclContextBase* prev_context;
+	EclContextBase* cur_context;
+	EclRunContext context_data;
+	
+
+	virtual int32_t HighECL_Run() {
+		return 0;
+	}
+	virtual int32_t get_int_global(int32_t) {
+		return 0;
+	}
+	virtual int32_t* get_int_global_ptr(int32_t) {
+		return NULL;
+	}
+	virtual float get_float_global(int32_t) {
+		return 0.0f;
+	}
+	virtual float* get_gloat_global_ptr(int32_t) {
+		return NULL;
+	}
+	virtual EclContextBase* destructor(bool destroy_base) {
+		//this->delete_async_contexts();
+		if (destroy_base) {
+			delete this;
+		}
+		return this;
+	}
+};
+
+constexpr auto testing = sizeof(EclContextBase);
 
 struct EnemyFull {
 	EnemyFullVTable** vtable;
 	/* ... */	void* next_in_some_list;
-	/* ... */	void* prev_in_some_list;
+	/* ... */	EclRunContext* prev_context;
 	/* ... */	EclRunContextHolder context;
 	/* ... */
 	/*0x1218*/	EclFileManager* file_manager;
-	/*0x121C*/	EclRunContext* primary_context;
-	/*0x1220*/	ZUNLinkedList<EclRunContext>* async_context_list;
-	/* ... */	void* unused_async_list_ptr_A;
-	/* ... */	void* unused_async_list_ptr_B;
+
+	/*0x121C*/	ZUNLinkedList<EclRunContext> context_list;
+
+	///*0x121C*/	EclRunContext* current_context;
+	///*0x1220*/	ZUNLinkedList<EclRunContext>* async_context_list;
+	///* ... */	void* unused_async_list_ptr_A;
+	///* ... */	void* unused_async_list_ptr_B;
+
 	/* ... */	unsigned char unknownA[4];
 	/*0x122C*/	Enemy enemy_inner;
 	/* ... */	void* on_death_callback;
 	/* ... */	int32_t enemy_id;
 	/* ... */	int32_t ecl_global_var_9909;
 	/* ... */	uint32_t __field_572C;
+
+	// 0x42CDD0
+	noinline void delete_async_contexts(void) {
+		/*ZUNLinkedList<EclRunContext>* async_context_node = this->async_context_list;
+		while (async_context_node) {
+			ZUNLinkedList<EclRunContext>* next_node = async_context_node->next;
+			delete async_context_node->data;
+			delete async_context_node;
+			async_context_node = next_node;
+		}*/
+	}
 
 	// 0x42FE80
 	noinline int32_t update() {
@@ -827,13 +967,41 @@ struct EnemyFull {
 
 	// 0x48D420
 	noinline int32_t ecl_run(float current_gamespeed) {
-		assume_all_registers_volatile(this);
-		return 1 + current_gamespeed + (uintptr_t)this;
+		int32_t is_not_async = true;
+		ZUNLinkedList<EclRunContext>* context_ptr = &this->context_list;
+		while (context_ptr != NULL) {
+			ZUNLinkedList<EclRunContext>* next_context = context_ptr->next;
+			EclRunContext* current_context = context_ptr->data;
+			this->context.current_context = current_context;
+			if (is_not_async) {
+				if (auto ret = current_context->LowECL_Run(current_gamespeed)) {
+					return -1;
+				} else {
+					is_not_async = false;
+				}
+			} else {
+				if (current_context->LowECL_Run(current_gamespeed)) {
+					delete this->context.current_context;
+					if (ZUNLinkedList<EclRunContext>* temp_next_context = context_ptr->next) {
+						temp_next_context->prev = context_ptr->prev;
+					}
+					if (ZUNLinkedList<EclRunContext>* temp_prev_context = context_ptr->prev) {
+						temp_prev_context->next = context_ptr->next;
+					}
+					context_ptr->next = NULL;
+					context_ptr->prev = NULL;
+					delete context_ptr;
+				}
+			}
+			context_ptr = next_context;
+		}
+		this->context.current_context = &this->context.primary_context;
+		return 0;
 	}
 };
 ValidateFieldOffset(0x0,	EnemyFull, vtable);
 ValidateFieldOffset(0x4,	EnemyFull, next_in_some_list);
-ValidateFieldOffset(0x8,	EnemyFull, prev_in_some_list);
+ValidateFieldOffset(0x8,	EnemyFull, prev_context);
 
 // 0x42F890
 noinline void Enemy::update_fog(void) {
@@ -1097,4 +1265,330 @@ void dummy_for_types() {
 	yeetus.make_coords_from_vector(5.0f, 2.0f);
 	EnemyManager test;
 	test.on_tick();
+}
+
+EclInstr* EclRunContext::get_sub_instrs() {
+	int32_t instr_offset = this->current_instr_offset;
+	if (instr_offset != -1 && this->current_sub_index != -1) {
+		return (EclInstr*)&(*(this->enemy_full->file_manager->subroutines))[this->current_sub_index].sub_header->instructions[instr_offset];
+	} else {
+		return NULL;
+	}
+}
+
+noinline int32_t EclRunContext::LowECL_Run(float current_gamespeed) {
+	int32_t current_instr_offset = this->current_instr_offset;
+	if (current_instr_offset == -1) return -1;
+	int32_t sub_index = this->current_sub_index;
+	if (sub_index == -1) return -1;
+
+	EnemyFull* enemy_full = this->enemy_full;
+	float time = this->time;
+
+	EclInstr* current_instr = (EclInstr*)&(*(this->enemy_full->file_manager->subroutines))[sub_index].sub_header->instructions[current_instr_offset];
+
+	if (time >= current_instr->time) {
+
+	}
+	if (!(current_instr->difficulty_mask & this->current_difficulty_mask)) {
+
+	}
+
+	switch (current_instr->opcode) {
+		case 10: // ret
+			this->stackLeave();
+			if (!this->stack_top_offset) goto DeletThis;
+			this->current_sub_index = this->stack_pop<int>();
+			this->current_instr_offset = this->stack_pop<int>();
+			this->time = this->stack_pop<float>();
+			this->stack_top_offset = this->stack_pop<int>();
+			current_instr = this->get_sub_instrs();
+			if (this->current_instr_offset >= 0) break;
+			[[fallthrough]];
+		DeletThis: case 1: // delete
+			this->current_instr_offset = -1;
+			this->current_sub_index = -1;
+			return -1;
+		case 15: // callAsync
+			//this->enemy_full->new_async(-1, false);
+			break;
+		case 21: // killAllAsync
+			//this->enemy_full->kill_asyncs();
+			break;
+		case 16: // callAsyncId
+			// TODO
+			break;
+		case 17: // killAsync
+			// TODO
+		case 18: // unknown18
+			// TODO
+		case 19: // unknown19
+			// TODO
+		case 20: // unknown20
+			// TODO
+		case 11: // call
+			current_instr->stack_refs = 0;
+			if (this->ecl_call(sub_index, 0, this)) goto DeletThis;
+			current_instr = this->get_sub_instrs();
+			break;
+		case 14: { // jmpNeq
+			EclStackItem stack_val = this->stack_pop<EclStackItem>();
+			if (char stack_type = this->stack_pop<char>(); stack_type == 'f') {
+				stack_val.integer = stack_val.real;
+			}
+			if (stack_val.integer) goto Jump;
+			break;
+		}
+		case 13: { // jmpEqu
+			EclStackItem stack_val = this->stack_pop<EclStackItem>();
+			if (char stack_type = this->stack_pop<char>(); stack_type == 'f') {
+				stack_val.integer = stack_val.real;
+			}
+			if (!stack_val.integer) break;
+			[[fallthrough]];
+		}
+	Jump: case 12: { // jmp
+			this->time = *(int32_t*)&current_instr->data[4];
+			int32_t* new_instr_offset = (int32_t*)&current_instr->data[0];
+			this->current_instr_offset = *new_instr_offset;
+			current_instr = (EclInstr*)((uintptr_t)current_instr + new_instr_offset);
+			break;
+		}
+		case 23: // wait
+			this->time -= this->get_int_arg(0);
+			break;
+		case 24: // waitf
+			this->time -= this->get_float_arg(0);
+			break;
+		case 40: { // stackFrame
+			int32_t new_stack_count = this->get_int_arg(0);
+			int32_t old_stack_top = this->stack_top_offset;
+			int32_t new_stack_top = old_stack_top + new_stack_count;
+			if (new_stack_top < EclStackSize) {
+				this->stack_top_offset = new_stack_top;
+				this->stack_push<int>(this->stack_locals_offset);
+				this->stack_locals_offset = old_stack_top;
+			}
+			break;
+		}
+		case 41: { // stackLeave
+			this->stackLeave();
+			break;
+		}
+		case 42: { // push_int
+
+		}
+		case 43: { // set_int
+			//this->get_int_arg_ptr(this)
+			//this->stack_pop<int>()
+		}
+		case 44: { // push_float
+
+		}
+		case 45: { // set_float
+
+		}
+		case 50: { // addi
+			int32_t second_val = this->stack_pop_cast<int>();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val + second_val);
+			break;
+		}
+		case 52: { // subi
+			int32_t second_val = this->stack_pop_cast<int>();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val - second_val);
+			break;
+		}
+		case 54: { // muli
+			int32_t second_val = this->stack_pop_cast<int>();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val * second_val);
+			break;
+		}
+		case 56: { // divi
+			int32_t second_val = this->stack_pop_cast<int>();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val / second_val);
+			break;
+		}
+		case 58: { // modi
+			int32_t second_val = this->stack_pop_cast<int>();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val % second_val);
+			break;
+		}
+		case 51: { // addf
+			float second_val = this->stack_pop_cast<float>();
+			float first_val = this->stack_pop_cast<float>();
+			this->stack_push_type<float>(first_val + second_val);
+			break;
+		}
+		case 53: { // subf
+			float second_val = this->stack_pop_cast<float>();
+			float first_val = this->stack_pop_cast<float>();
+			this->stack_push_type<float>(first_val - second_val);
+			break;
+		}
+		case 55: { // mulf
+			float second_val = this->stack_pop_cast<float>();
+			float first_val = this->stack_pop_cast<float>();
+			this->stack_push_type<float>(first_val * second_val);
+			break;
+		}
+		case 57: { // divf
+			float second_val = this->stack_pop_cast<float>();
+			float first_val = this->stack_pop_cast<float>();
+			this->stack_push_type<float>(first_val / second_val);
+			break;
+		}
+		case 59: { // equi
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val == second_val);
+			break;
+		}
+		case 61: { // neqi
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val != second_val);
+			break;
+		}
+		case 63: { // lesi
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val < second_val);
+			break;
+		}
+		case 65: { // leqi
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val <= second_val);
+			break;
+		}
+		case 67: { // gtri
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val > second_val);
+			break;
+		}
+		case 69: { // geqi
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val >= second_val);
+			break;
+		}
+		case 71: { // noti
+			this->stack_push_type<int>(!this->stack_pop_int());
+			break;
+		}
+		case 60: { // equf
+			float second_value = this->stack_pop_cast<float>();
+			float first_value = this->stack_pop_cast<float>();
+			this->stack_push_type<int>(first_value == second_value);
+			break;
+		}
+		case 62: { // neqf
+			float second_value = this->stack_pop_cast<float>();
+			float first_value = this->stack_pop_cast<float>();
+			this->stack_push_type<int>(first_value != second_value);
+			break;
+		}
+		case 64: { // lesf
+			float second_value = this->stack_pop_cast<float>();
+			float first_value = this->stack_pop_cast<float>();
+			this->stack_push_type<int>(first_value < second_value);
+			break;
+		}
+		case 66: { // leqf
+			float second_value = this->stack_pop_cast<float>();
+			float first_value = this->stack_pop_cast<float>();
+			this->stack_push_type<int>(first_value <= second_value);
+			break;
+		}
+		case 68: { // gtrf
+			float second_value = this->stack_pop_cast<float>();
+			float first_value = this->stack_pop_cast<float>();
+			this->stack_push_type<int>(first_value > second_value);
+			break;
+		}
+		case 70: { // geqf
+			float second_value = this->stack_pop_cast<float>();
+			float first_value = this->stack_pop_cast<float>();
+			this->stack_push_type<int>(first_value >= second_value);
+			break;
+		}
+		case 72: { // notf
+			this->stack_push_type<int>(!this->stack_pop_cast<float>());
+			break;
+		}
+		case 73: { // or
+			int32_t second_val = this->stack_pop_cast<int>();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val || second_val);
+			break;
+		}
+		case 74: { // and
+			int32_t second_val = this->stack_pop_cast<int>();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val && second_val);
+			break;
+		}
+		case 75: { // bit_xor
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val ^ second_val);
+			break;
+		}
+		case 76: { // bit_or
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val | second_val);
+			break;
+		}
+		case 77: { // bit_and
+			int32_t second_val = this->stack_pop_int();
+			int32_t first_val = this->stack_pop_int();
+			this->stack_push_type<int>(first_val & second_val);
+			break;
+		}
+		case 83: { // negi
+			this->stack_push_type<int>(-this->stack_pop_int());
+			break;
+		}
+		case 84: { // negf
+			this->stack_push_type<float>(-this->stack_pop_cast<float>());
+			break;
+		}
+		case 78: { // deci
+			int32_t old_value = this->get_int_arg(0);
+			*this->get_int_arg_ptr((int32_t)this) = old_value - 1;
+			this->stack_push_type<int>(old_value);
+			break;
+		}
+		case 79: { // sin
+			this->stack_push_type<float>(sin(this->stack_pop_cast<float>()));
+			break;
+		}
+		case 88: { // sqrt
+			this->stack_push_type<float>(sqrt(this->stack_pop_cast<float>()));
+			break;
+		}
+		case 80: { // cos
+			this->stack_push_type<float>(cos(this->stack_pop_cast<float>()));
+			break;
+		}
+		case 81:{ // circlePos
+			float vec_angle = reduce_angle(this->get_float_arg(2));
+			// TODO
+			break;
+		}
+		default: {
+			//this->enemy_full->vtable[0]()
+		}
+	}
+	//
+	if (uint8_t stack_pop = current_instr->stack_refs) {
+		this->stack_top_offset -= stack_pop;
+	}
 }
